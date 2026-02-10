@@ -18,9 +18,16 @@
         "name": "next"
       }
     ],
+
+    // ────────────────────────────────────────────────
+    // Fix alias to point to app/ folder (or root if needed)
+    // ────────────────────────────────────────────────
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
-    }
+    },
+
+    "types": ["node"]
   },
   "include": [
     "next-env.d.ts",
