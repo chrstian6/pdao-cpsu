@@ -23,6 +23,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { UserListItem } from "@/actions/registry";
 import {
@@ -30,6 +38,12 @@ import {
   renewUserCard,
   checkCardExpiryStatus,
 } from "@/actions/registrystatus";
+import {
+  checkBatchApplicationStatus,
+  UserStatus,
+} from "@/actions/application-status";
+import { getPwdApplicationByUserId } from "@/actions/application";
+import { PdfViewerModal } from "./pdf-viewer-modal";
 import {
   getFullName,
   formatDisplayDate,
@@ -50,6 +64,9 @@ import {
   Clock,
   FileQuestion,
   UserCheck,
+  Eye,
+  FileText,
+  AlertCircle,
 } from "lucide-react";
 
 interface RegistryTableProps {
@@ -69,7 +86,11 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
   });
   const [filteredUsers, setFilteredUsers] =
     React.useState<UserListItem[]>(initialUsers);
+  const [userStatuses, setUserStatuses] = React.useState<
+    Record<string, UserStatus>
+  >({});
   const [loading, setLoading] = React.useState<string | null>(null);
+  const [statusLoading, setStatusLoading] = React.useState(true);
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [dialogType, setDialogType] = React.useState<"verify" | "renew" | null>(
     null,
@@ -78,24 +99,38 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
     null,
   );
 
-  // Debug: Log user verification status
+  // New dialog for existing application
+  const [existingAppDialogOpen, setExistingAppDialogOpen] = React.useState(false);
+  const [existingAppUser, setExistingAppUser] = React.useState<UserListItem | null>(null);
+
+  // PDF Viewer modal state
+  const [modalOpen, setModalOpen] = React.useState(false);
+  const [selectedApplication, setSelectedApplication] =
+    React.useState<any>(null);
+  const [selectedUserForModal, setSelectedUserForModal] =
+    React.useState<UserListItem | null>(null);
+  const [applicationLoading, setApplicationLoading] = React.useState(false);
+
+  // Fetch statuses for all users
   React.useEffect(() => {
-    if (initialUsers.length > 0) {
-      console.log("===== USER DATA DEBUG =====");
-      initialUsers.forEach((u, index) => {
-        console.log(`User ${index + 1}:`, {
-          id: u._id,
-          name: getFullName(u),
-          is_verified: u.is_verified,
-          is_verified_type: typeof u.is_verified,
-          has_application: !!u.pwd_issued_id,
-          has_card: !!u.card_id,
-          pwd_issued_id: u.pwd_issued_id,
-          card_id: u.card_id,
-        });
-      });
-      console.log("===========================");
-    }
+    const fetchStatuses = async () => {
+      if (initialUsers.length === 0) return;
+
+      setStatusLoading(true);
+      const userIds = initialUsers.map((user) => user.user_id);
+
+      const result = await checkBatchApplicationStatus(userIds);
+
+      if (result.success && result.data) {
+        setUserStatuses(result.data);
+      } else {
+        console.error("Failed to fetch user statuses:", result.error);
+      }
+
+      setStatusLoading(false);
+    };
+
+    fetchStatuses();
   }, [initialUsers]);
 
   // Filter function
@@ -139,19 +174,23 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
   };
 
   const handleVerify = async (user: UserListItem) => {
-    console.log("Verify button clicked for user:", {
-      id: user._id,
-      name: getFullName(user),
-      is_verified: user.is_verified,
-    });
-
     // Check if user is already verified
     if (user.is_verified) {
       toast.error("User is already verified");
       return;
     }
 
-    // Open confirmation dialog
+    const status = userStatuses[user.user_id];
+
+    // Check if user has an existing application
+    if (status?.hasApplication) {
+      // Show dialog that application already exists
+      setExistingAppUser(user);
+      setExistingAppDialogOpen(true);
+      return;
+    }
+
+    // No existing application - proceed with verification
     setSelectedUser(user);
     setDialogType("verify");
     setDialogOpen(true);
@@ -213,6 +252,27 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
     }
   };
 
+  const handleViewApplication = async (user: UserListItem) => {
+    if (!user.user_id) return;
+
+    setApplicationLoading(true);
+    try {
+      const result = await getPwdApplicationByUserId(user.user_id);
+
+      if (result.success && result.data) {
+        setSelectedApplication(result.data);
+        setSelectedUserForModal(user);
+        setModalOpen(true);
+      } else {
+        toast.error("No application found for this user");
+      }
+    } catch (error) {
+      toast.error("Failed to fetch application details");
+    } finally {
+      setApplicationLoading(false);
+    }
+  };
+
   const confirmAction = async () => {
     if (!selectedUser || !dialogType) return;
 
@@ -221,15 +281,12 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
 
     try {
       if (dialogType === "verify") {
-        // For verify, redirect to the form page
-        router.push(`/dashboard/registry/verify/${selectedUser._id}`);
+        router.push(`/dashboard/registry/verify/${selectedUser.user_id}`);
       } else {
-        // For renew, call the renew API
         const result = await renewUserCard(selectedUser._id);
 
         if (result.success) {
           toast.success(result.message || "Card renewed successfully");
-          // Refresh the page data
           window.location.reload();
         } else {
           toast.error(result.error || "Failed to renew card");
@@ -259,7 +316,13 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
     return "Renew PWD Card";
   };
 
-  // Helper function to check if user has submitted an application (has pwd_issued_id)
+  // Helper function to check if user has an application
+  const hasApplication = (user: UserListItem) => {
+    const status = userStatuses[user.user_id];
+    return status?.hasApplication || false;
+  };
+
+  // Helper function to check if user has submitted an application
   const hasSubmittedApplication = (user: UserListItem) => {
     return user.pwd_issued_id !== null && user.pwd_issued_id !== undefined;
   };
@@ -269,61 +332,168 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
     return user.card_id !== null && user.card_id !== undefined;
   };
 
-  // Helper function to get application status display
+  // Helper function to get application status display using our fetched status
   const getApplicationStatusDisplay = (user: UserListItem) => {
-    if (!hasSubmittedApplication(user)) {
+    const status = userStatuses[user.user_id];
+
+    if (!status) {
+      return {
+        icon: <Loader2 className="h-3 w-3 animate-spin text-gray-400" />,
+        text: "Loading...",
+        color: "text-gray-500",
+        bgColor: "bg-gray-50",
+        borderColor: "border-gray-200",
+        tooltip: "Fetching status...",
+      };
+    }
+
+    // First check if user has an application
+    if (!status.hasApplication) {
       return {
         icon: <FileQuestion className="h-3 w-3 text-gray-400" />,
         text: "No application",
         color: "text-gray-500",
         bgColor: "bg-gray-50",
         borderColor: "border-gray-200",
-        tooltip: "Admin will create application during verification",
+        tooltip: "No application found. Click Verify to create one.",
       };
     }
 
-    if (!user.is_verified) {
-      return {
-        icon: <Clock className="h-3 w-3 text-yellow-600" />,
-        text: "Pending verification",
-        color: "text-yellow-700",
-        bgColor: "bg-yellow-50",
-        borderColor: "border-yellow-200",
-        tooltip: "Application submitted, waiting for verification",
-      };
+    // Then check application status
+    switch (status.applicationStatus) {
+      case "verified":
+        return {
+          icon: <CheckCircle className="h-3 w-3 text-green-600" />,
+          text: "Verified",
+          color: "text-green-700",
+          bgColor: "bg-green-50",
+          borderColor: "border-green-200",
+          tooltip: "User verified and card issued",
+        };
+      case "completed":
+        return {
+          icon: <CheckCircle className="h-3 w-3 text-green-600" />,
+          text: "Completed",
+          color: "text-green-700",
+          bgColor: "bg-green-50",
+          borderColor: "border-green-200",
+          tooltip: "Application completed",
+        };
+      case "approved":
+        return {
+          icon: <CheckCircle className="h-3 w-3 text-green-600" />,
+          text: "Approved",
+          color: "text-green-700",
+          bgColor: "bg-green-50",
+          borderColor: "border-green-200",
+          tooltip: "Application approved",
+        };
+      case "submitted":
+        return {
+          icon: <Clock className="h-3 w-3 text-blue-600" />,
+          text: "Submitted",
+          color: "text-blue-700",
+          bgColor: "bg-blue-50",
+          borderColor: "border-blue-200",
+          tooltip: "Application submitted",
+        };
+      case "under_review":
+        return {
+          icon: <Clock className="h-3 w-3 text-purple-600" />,
+          text: "Under Review",
+          color: "text-purple-700",
+          bgColor: "bg-purple-50",
+          borderColor: "border-purple-200",
+          tooltip: "Application under review",
+        };
+      case "pending":
+        return {
+          icon: <Clock className="h-3 w-3 text-yellow-600" />,
+          text: "Pending",
+          color: "text-yellow-700",
+          bgColor: "bg-yellow-50",
+          borderColor: "border-yellow-200",
+          tooltip: "Application pending",
+        };
+      case "rejected":
+        return {
+          icon: <AlertTriangle className="h-3 w-3 text-red-600" />,
+          text: "Rejected",
+          color: "text-red-700",
+          bgColor: "bg-red-50",
+          borderColor: "border-red-200",
+          tooltip: "Application rejected",
+        };
+      default:
+        return {
+          icon: <FileText className="h-3 w-3 text-blue-600" />,
+          text: "Application exists",
+          color: "text-blue-700",
+          bgColor: "bg-blue-50",
+          borderColor: "border-blue-200",
+          tooltip: "Application exists. Click to view.",
+        };
     }
-
-    return {
-      icon: <CheckCircle className="h-3 w-3 text-green-600" />,
-      text: "Verified",
-      color: "text-green-700",
-      bgColor: "bg-green-50",
-      borderColor: "border-green-200",
-      tooltip: "User verified and card issued",
-    };
   };
 
-  // Helper function to get PWD card status display
+  // Helper function to get card status display using our fetched status
   const getCardStatusDisplay = (user: UserListItem) => {
-    if (!hasIssuedCard(user)) {
+    const status = userStatuses[user.user_id];
+
+    if (!status) {
       return {
-        icon: <IdCard className="h-3 w-3 text-gray-400" />,
-        text: "No card issued",
+        icon: <Loader2 className="h-3 w-3 animate-spin text-gray-400" />,
+        text: "Loading...",
         color: "text-gray-500",
         bgColor: "bg-gray-50",
         borderColor: "border-gray-200",
-        tooltip: "Card will be issued upon verification",
+        tooltip: "Fetching status...",
+      };
+    }
+
+    if (status.cardStatus === "active") {
+      return {
+        icon: <CheckCircle className="h-3 w-3 text-green-600" />,
+        text: "Active card",
+        color: "text-green-700",
+        bgColor: "bg-green-50",
+        borderColor: "border-green-200",
+        tooltip: "Card is active",
       };
     }
 
     return {
-      icon: <CheckCircle className="h-3 w-3 text-green-600" />,
-      text: "Active card",
-      color: "text-green-700",
-      bgColor: "bg-green-50",
-      borderColor: "border-green-200",
-      tooltip: "Card is active",
+      icon: <IdCard className="h-3 w-3 text-gray-400" />,
+      text: "No card issued",
+      color: "text-gray-500",
+      bgColor: "bg-gray-50",
+      borderColor: "border-gray-200",
+      tooltip: "Card will be issued upon verification",
     };
+  };
+
+  // Helper function to determine if verify button should be enabled
+  const canVerify = (user: UserListItem) => {
+    const status = userStatuses[user.user_id];
+
+    // Can verify if:
+    // 1. User is not verified
+    // 2. User has no existing application
+    return !user.is_verified && (!status?.hasApplication);
+  };
+
+  // Helper function to get verify button tooltip
+  const getVerifyButtonTooltip = (user: UserListItem) => {
+    if (user.is_verified) {
+      return "User is already verified";
+    }
+
+    const status = userStatuses[user.user_id];
+    if (status?.hasApplication) {
+      return "User has already submitted an application. Click the application badge to view.";
+    }
+
+    return "Start verification process and create application";
   };
 
   return (
@@ -396,6 +566,9 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
                   const cardStatus = getCardStatusDisplay(user);
                   const isVerified = user.is_verified === true;
                   const isLoading = loading === user._id;
+                  const userStatus = userStatuses[user.user_id];
+                  const hasExistingApp = hasApplication(user);
+                  const canVerifyUser = canVerify(user);
 
                   return (
                     <TableRow key={user._id} className="hover:bg-gray-50">
@@ -406,17 +579,36 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
                       </TableCell>
 
                       <TableCell>
-                        <div
-                          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md ${appStatus.bgColor} border ${appStatus.borderColor}`}
-                          title={appStatus.tooltip}
+                        <button
+                          onClick={() => handleViewApplication(user)}
+                          disabled={applicationLoading || !hasExistingApp}
+                          className={`w-full text-left group ${
+                            !hasExistingApp ? "cursor-not-allowed opacity-60" : ""
+                          }`}
+                          title={
+                            hasExistingApp
+                              ? "Click to view application details"
+                              : "No application found"
+                          }
                         >
-                          {appStatus.icon}
-                          <span
-                            className={`text-xs font-medium ${appStatus.color}`}
+                          <div
+                            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md ${appStatus.bgColor} border ${appStatus.borderColor} ${
+                              hasExistingApp
+                                ? "group-hover:border-blue-400 group-hover:shadow-sm transition-all cursor-pointer"
+                                : ""
+                            }`}
                           >
-                            {appStatus.text}
-                          </span>
-                        </div>
+                            {appStatus.icon}
+                            <span
+                              className={`text-xs font-medium ${appStatus.color}`}
+                            >
+                              {appStatus.text}
+                            </span>
+                            {hasExistingApp && (
+                              <Eye className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-blue-500" />
+                            )}
+                          </div>
+                        </button>
                         {hasSubmittedApplication(user) &&
                           user.pwd_issued_id && (
                             <div className="mt-1">
@@ -487,7 +679,7 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
 
                       <TableCell>
                         <div className="flex items-center justify-center gap-2">
-                          {/* Verify Button - Opens Confirmation Modal */}
+                          {/* Verify Button */}
                           <Button
                             variant="outline"
                             size="sm"
@@ -498,18 +690,14 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
                               ${
                                 isVerified
                                   ? "bg-gray-50 text-gray-400 border-gray-300 cursor-not-allowed opacity-70"
-                                  : isLoading
-                                    ? "bg-blue-50 text-blue-500 border-blue-300 cursor-wait opacity-80"
-                                    : "text-blue-700 border-blue-400 hover:bg-blue-50 hover:text-blue-800 hover:border-blue-500 active:bg-blue-100 shadow-sm"
+                                  : hasExistingApp
+                                    ? "bg-gray-50 text-gray-400 border-gray-300 cursor-not-allowed opacity-70"
+                                    : isLoading || statusLoading
+                                      ? "bg-blue-50 text-blue-500 border-blue-300 cursor-wait opacity-80"
+                                      : "text-blue-700 border-blue-400 hover:bg-blue-50 hover:text-blue-800 hover:border-blue-500 active:bg-blue-100 shadow-sm"
                               }
                             `}
-                            title={
-                              isVerified
-                                ? "User is already verified"
-                                : isLoading
-                                  ? "Loading..."
-                                  : "Start verification process"
-                            }
+                            title={getVerifyButtonTooltip(user)}
                           >
                             {isLoading ? (
                               <>
@@ -530,10 +718,16 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
                             size="sm"
                             onClick={() => handleRenew(user)}
                             disabled={
-                              isLoading || !isVerified || !hasIssuedCard(user)
+                              isLoading ||
+                              !isVerified ||
+                              !hasIssuedCard(user) ||
+                              (userStatus && !userStatus.canRenew)
                             }
                             className={`h-8 px-3 text-xs font-medium min-w-[90px] ${
-                              isVerified && hasIssuedCard(user) && !isLoading
+                              isVerified &&
+                              hasIssuedCard(user) &&
+                              !isLoading &&
+                              userStatus?.canRenew
                                 ? "text-green-700 border-green-400 hover:bg-green-50 hover:text-green-800 hover:border-green-500 active:bg-green-100 shadow-sm"
                                 : "text-gray-400 border-gray-300 opacity-70 cursor-not-allowed bg-gray-50"
                             }`}
@@ -542,9 +736,11 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
                                 ? "No PWD card to renew"
                                 : !isVerified
                                   ? "User must be verified first"
-                                  : isLoading
-                                    ? "Renewing..."
-                                    : "Renew Card"
+                                  : !userStatus?.canRenew
+                                    ? "Cannot renew at this time"
+                                    : isLoading
+                                      ? "Renewing..."
+                                      : "Renew Card"
                             }
                           >
                             {isLoading ? (
@@ -575,7 +771,47 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
         </div>
       )}
 
-      {/* Confirmation Dialog - For both Verify and Renew */}
+      {/* Existing Application Dialog */}
+      <Dialog open={existingAppDialogOpen} onOpenChange={setExistingAppDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertCircle className="h-5 w-5" />
+              Application Already Submitted
+            </DialogTitle>
+            <DialogDescription className="pt-4">
+              {existingAppUser && (
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-600">
+                    <span className="font-medium">{getFullName(existingAppUser)}</span> has already submitted a PWD application form.
+                  </p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
+                    <p className="text-sm text-amber-800">
+                      <strong>Note:</strong> You cannot create another application for this user.
+                      Please click on the application badge in the table to view or manage their existing application.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-center">
+            <Button
+              type="button"
+              variant="default"
+              onClick={() => {
+                setExistingAppDialogOpen(false);
+                setExistingAppUser(null);
+              }}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              Understood
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog for New Application */}
       <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -599,6 +835,27 @@ export function RegistryTable({ initialUsers }: RegistryTableProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* PDF Viewer Modal */}
+      <PdfViewerModal
+        isOpen={modalOpen}
+        onClose={() => {
+          setModalOpen(false);
+          setSelectedApplication(null);
+          setSelectedUserForModal(null);
+        }}
+        user={selectedUserForModal}
+        userStatus={
+          selectedUserForModal
+            ? userStatuses[selectedUserForModal.user_id]
+            : null
+        }
+        applicationData={selectedApplication}
+        onStatusUpdate={() => {
+          // Refresh the page to show updated status
+          window.location.reload();
+        }}
+      />
     </div>
   );
 }

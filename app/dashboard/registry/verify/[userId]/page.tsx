@@ -1,4 +1,4 @@
-import { getUserById } from "@/actions/registry";
+import { getUserByUserId } from "@/actions/registry"; // Updated import
 import { getPWDCardByUserId } from "@/actions/pwdcard";
 import { PwdApplicationForm } from "@/components/registry/pwd-application-form";
 import { notFound } from "next/navigation";
@@ -14,10 +14,11 @@ interface VerifyPageProps {
 }
 
 export default async function VerifyPage({ params }: VerifyPageProps) {
-  // Await the params Promise to get the userId
+  // Await the params Promise to get the userId (which is now the user_id in PDAO format)
   const { userId } = await params;
 
-  const userResult = await getUserById(userId);
+  // Use getUserByUserId instead of getUserById
+  const userResult = await getUserByUserId(userId);
   const cardResult = await getPWDCardByUserId(userId);
 
   if (!userResult.success || !userResult.data) {
@@ -50,14 +51,6 @@ export default async function VerifyPage({ params }: VerifyPageProps) {
   return (
     <div className="container mx-auto py-10">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">PWD Application Form</h1>
-          <p className="text-muted-foreground mt-2">
-            Complete the application details for {user.first_name}{" "}
-            {user.last_name}
-          </p>
-        </div>
-
         <PwdApplicationForm user={user} />
       </div>
     </div>

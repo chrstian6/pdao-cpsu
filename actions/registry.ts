@@ -112,3 +112,46 @@ export async function getUserById(userId: string): Promise<{
     };
   }
 }
+
+// New function to get user by user_id (PDAO format)
+export async function getUserByUserId(userId: string): Promise<{
+  success: boolean;
+  data?: any;
+  error?: string;
+}> {
+  try {
+    await connectToDatabase();
+
+    const user = await UserModel.findOne({ user_id: userId })
+      .select("-password")
+      .lean()
+      .exec();
+
+    if (!user) {
+      return {
+        success: false,
+        error: "User not found",
+      };
+    }
+
+    // Transform dates to strings for serialization
+    const transformedUser = {
+      ...user,
+      _id: user._id.toString(),
+      date_of_birth: user.date_of_birth.toISOString().split("T")[0],
+      created_at: user.created_at?.toISOString(),
+      updated_at: user.updated_at?.toISOString(),
+    };
+
+    return {
+      success: true,
+      data: transformedUser,
+    };
+  } catch (error) {
+    console.error("Error fetching user by user_id:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch user",
+    };
+  }
+}

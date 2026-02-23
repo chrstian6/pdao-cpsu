@@ -12,9 +12,21 @@ import {
   accomplishedByEnum,
 } from "../types/form";
 
+// Define application status enum with new values
+export const applicationStatusEnum = [
+  "pending",
+  "approved",
+  "cancelled",
+  "renew",
+  "rejected",
+  "unverified",
+  "verified",
+] as const;
+
 // Zod Validation Schema (export for server-side validation)
 export const PwdApplicationSchema = z.object({
   formId: z.string().optional(),
+  userId: z.string().optional(),
   applicationType: z.object({
     isNewApplicant: z.boolean(),
     isRenewal: z.boolean(),
@@ -106,18 +118,36 @@ export const PwdApplicationSchema = z.object({
     philHealthNo: z.string().optional(),
   }),
 
-  // Family Background
+  // Family Background - Updated to have separate name fields
   familyBackground: z.object({
-    fatherName: z.string().optional(),
-    motherName: z.string().optional(),
-    guardianName: z.string().optional(),
+    father: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
+    mother: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
+    guardian: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
   }),
 
   // Accomplished By
   accomplishedBy: z.object({
-    type: z.array(z.enum(accomplishedByEnum)),
+    type: z.enum(accomplishedByEnum),
     certifyingPhysician: z.string().optional(),
-    licenseNo: z.string(),
+    licenseNo: z.string().optional(),
   }),
 
   // Processing Information
@@ -128,7 +158,10 @@ export const PwdApplicationSchema = z.object({
     reportingUnit: z.string(),
   }),
 
-  controlNo: z.string(),
+  // Status field with new default value
+  status: z.enum(applicationStatusEnum).default("pending"),
+
+  controlNo: z.string().optional(),
 });
 
 export type IPwdApplication = z.infer<typeof PwdApplicationSchema>;
@@ -144,6 +177,10 @@ const pwdApplicationMongooseSchema = new mongoose.Schema<IPwdApplication>(
           "PWD-" + Date.now() + "-" + Math.random().toString(36).substr(2, 9)
         );
       },
+    },
+    userId: {
+      type: String,
+      required: true,
     },
     applicationType: {
       isNewApplicant: { type: Boolean, required: true },
@@ -212,16 +249,29 @@ const pwdApplicationMongooseSchema = new mongoose.Schema<IPwdApplication>(
       philHealthNo: String,
     },
 
+    // Family Background - Updated to have separate name fields
     familyBackground: {
-      fatherName: String,
-      motherName: String,
-      guardianName: String,
+      father: {
+        lastName: String,
+        firstName: String,
+        middleName: String,
+      },
+      mother: {
+        lastName: String,
+        firstName: String,
+        middleName: String,
+      },
+      guardian: {
+        lastName: String,
+        firstName: String,
+        middleName: String,
+      },
     },
 
     accomplishedBy: {
-      type: [{ type: String, enum: accomplishedByEnum }],
+      type: { type: String, enum: accomplishedByEnum, required: true },
       certifyingPhysician: String,
-      licenseNo: { type: String, required: true },
+      licenseNo: String,
     },
 
     processingInfo: {
@@ -231,7 +281,15 @@ const pwdApplicationMongooseSchema = new mongoose.Schema<IPwdApplication>(
       reportingUnit: { type: String, required: true },
     },
 
-    controlNo: { type: String, required: true },
+    // Status field with new default value
+    status: {
+      type: String,
+      enum: applicationStatusEnum,
+      default: "pending",
+      required: true,
+    },
+
+    controlNo: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -244,7 +302,9 @@ pwdApplicationMongooseSchema.index({
   "personalInfo.firstName": 1,
 });
 pwdApplicationMongooseSchema.index({ formId: 1 });
+pwdApplicationMongooseSchema.index({ userId: 1 });
 pwdApplicationMongooseSchema.index({ personsWithDisabilityNumber: 1 });
+pwdApplicationMongooseSchema.index({ status: 1 });
 
 export const PwdApplication =
   mongoose.models.PwdApplication ||

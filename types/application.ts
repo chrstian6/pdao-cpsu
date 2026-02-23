@@ -11,6 +11,17 @@ import {
   accomplishedByEnum,
 } from "./form";
 
+// Define application status enum with new values (export for reuse)
+export const applicationStatusEnum = [
+  "pending",
+  "approved",
+  "cancelled",
+  "renew",
+  "rejected",
+  "unverified",
+  "verified",
+] as const;
+
 // Client-side validation schema (no Mongoose)
 export const PwdApplicationClientSchema = z.object({
   applicationType: z.object({
@@ -73,15 +84,34 @@ export const PwdApplicationClientSchema = z.object({
     psnNo: z.string().optional(),
     philHealthNo: z.string().optional(),
   }),
+  // Family Background - Updated to have separate name fields
   familyBackground: z.object({
-    fatherName: z.string().optional(),
-    motherName: z.string().optional(),
-    guardianName: z.string().optional(),
+    father: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
+    mother: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
+    guardian: z
+      .object({
+        lastName: z.string().optional(),
+        firstName: z.string().optional(),
+        middleName: z.string().optional(),
+      })
+      .optional(),
   }),
   accomplishedBy: z.object({
-    type: z.array(z.enum(accomplishedByEnum)),
+    type: z.enum(accomplishedByEnum),
     certifyingPhysician: z.string().optional(),
-    licenseNo: z.string(),
+    licenseNo: z.string().optional(),
   }),
   processingInfo: z.object({
     processingOfficer: z.string(),
@@ -89,6 +119,8 @@ export const PwdApplicationClientSchema = z.object({
     encoder: z.string(),
     reportingUnit: z.string(),
   }),
+  // Status field with new values (optional for client-side, will be set server-side)
+  status: z.enum(applicationStatusEnum).optional(),
   controlNo: z.string().optional(),
 });
 

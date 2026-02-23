@@ -33,17 +33,8 @@ export const disabilityTypeEnum = [
 ] as const;
 export type DisabilityType = (typeof disabilityTypeEnum)[number];
 
-export const disabilityCauseEnum = [
-  "Congenital / Inborn",
-  "Autism",
-  "ADHD",
-  "Cancer (RA11215)",
-  "Rare Disease (RA19747)",
-  "Acquired",
-  "Chronic Illness",
-  "Cerebral Palsy",
-  "Injury",
-] as const;
+// Updated: Only two values as requested
+export const disabilityCauseEnum = ["Congenital / Inborn", "Acquired"] as const;
 export type DisabilityCauseType = (typeof disabilityCauseEnum)[number];
 
 export const educationalAttainmentEnum = [
