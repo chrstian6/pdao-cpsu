@@ -145,6 +145,32 @@ export default function FaceVerification({
       )
       .trim();
 
+  // Calculate expiry date (3 years from date issued) and validity status
+  const calculateExpiry = (dateIssuedStr: string) => {
+    if (!dateIssuedStr) return null;
+    const cleaned = dateIssuedStr.replace(/\s/g, "");
+    const parts = cleaned.split("/");
+    if (parts.length !== 3) return null;
+    const [month, day, year] = parts.map(Number);
+    if (!month || !day || !year || year < 2000) return null;
+    const issued = new Date(year, month - 1, day);
+    const expiry = new Date(year + 3, month - 1, day);
+    const today = new Date();
+    const isExpired = today > expiry;
+    const diffMs = expiry.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return {
+      expiryStr: expiry.toLocaleDateString("en-PH", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      }),
+      isExpired,
+      daysLeft: isExpired ? 0 : diffDays,
+      daysOverdue: isExpired ? Math.abs(diffDays) : 0,
+    };
+  };
+
   // Official PWD ID disability types from the PDAO registration form
   // Using exact-match lookup is far more reliable than free-text OCR parsing
   const DISABILITY_LIST = [
@@ -297,16 +323,27 @@ export default function FaceVerification({
     const dateIssued = issuedMatch ? issuedMatch[1].replace(/\s/g, "") : "";
 
     // Blood type — all 8 types: A+, A-, B+, B-, AB+, AB-, O+, O-
-    // Root cause of + failing: negative lookahead (?![A-Za-z0-9]) blocks capture
-    // when Tesseract outputs "O+IN" with no space before next word.
-    // Fix: remove lookahead entirely — just greedily capture + or - after the letter.
-    // Also handles: lowercase (o+), space between letter and sign (O +), underscores.
+    // Tesseract misreads confirmed from real card scans:
+    //   "O +" (spaced) → "9%" (O→9, +→%)
+    //   "o+" (lowercase, no space) → "O+" (correct)
+    //   "O-" → "O-" (correct)
+    // Strategy 1: standard match (AB|[ABO]) + optional sign
+    // Strategy 2: fallback for digit/symbol misreads (9%→O+, 9-→O-, 0%→O+)
     let bloodType = "";
-    const BT_RE =
-      /BLOOD\s*TYPE[\s\S]{0,20}?(?<![A-Za-z])(AB|[ABO])\s*([+\-])?/i;
-    const btMatch = text.match(BT_RE);
-    if (btMatch) {
-      bloodType = (btMatch[1] + (btMatch[2] ?? "")).toUpperCase();
+    const btStandard = text.match(
+      /BLOOD\s*TYPE[\s\S]{0,20}?(?<![A-Za-z])(AB|[ABO])\s*([+\-])?/i,
+    );
+    if (btStandard) {
+      bloodType = (btStandard[1] + (btStandard[2] ?? "")).toUpperCase();
+    } else {
+      // Fallback: Tesseract read "O +" as "9%" — treat [09] near BLOOD TYPE as O
+      const btMisread = text.match(
+        /BLOOD\s*TYPE[\s\S]{0,20}?(?<![A-Za-z\d])([09])\s*([%+\-])/i,
+      );
+      if (btMisread) {
+        const sign = ["%", "+"].includes(btMisread[2]) ? "+" : "-";
+        bloodType = "O" + sign;
+      }
     }
 
     // Emergency contact name: line after "NAME:" in the emergency section
@@ -848,57 +885,89 @@ export default function FaceVerification({
             </Alert>
           )}
 
-          {idBackData && (
-            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Extracted from Back
-              </p>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                <dt className="text-gray-500">Address</dt>
-                <dd className="font-medium text-gray-900 col-span-1">
-                  {idBackData.address || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Date of Birth</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.date_of_birth || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Sex</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.sex || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Blood Type</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.blood_type || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Date Issued</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.date_issued || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Emergency Name</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.emergency_contact_name || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-                <dt className="text-gray-500">Emergency No.</dt>
-                <dd className="font-medium text-gray-900">
-                  {idBackData.emergency_contact_number || (
-                    <span className="italic text-gray-400">Not found</span>
-                  )}
-                </dd>
-              </dl>
-            </div>
-          )}
+          {idBackData &&
+            (() => {
+              const expiry = calculateExpiry(idBackData.date_issued ?? "");
+              return (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Extracted from Back
+                  </p>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <dt className="text-gray-500">Address</dt>
+                    <dd className="font-medium text-gray-900 col-span-1">
+                      {idBackData.address || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Date of Birth</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.date_of_birth || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Sex</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.sex || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Blood Type</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.blood_type || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Date Issued</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.date_issued || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Expiry Date</dt>
+                    <dd className="font-medium text-gray-900">
+                      {expiry ? (
+                        expiry.expiryStr
+                      ) : (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Validity</dt>
+                    <dd className="font-medium">
+                      {expiry ? (
+                        expiry.isExpired ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                            ✗ EXPIRED ({expiry.daysOverdue} days ago)
+                          </span>
+                        ) : expiry.daysLeft <= 90 ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                            ⚠ Expiring soon ({expiry.daysLeft} days left)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">
+                            ✓ Valid ({expiry.daysLeft} days left)
+                          </span>
+                        )
+                      ) : (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Emergency Name</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.emergency_contact_name || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                    <dt className="text-gray-500">Emergency No.</dt>
+                    <dd className="font-medium text-gray-900">
+                      {idBackData.emergency_contact_number || (
+                        <span className="italic text-gray-400">Not found</span>
+                      )}
+                    </dd>
+                  </dl>
+                </div>
+              );
+            })()}
         </CardContent>
       </Card>
 
