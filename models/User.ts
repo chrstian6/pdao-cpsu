@@ -230,7 +230,6 @@ const UserMongooseSchema = new Schema<IUserDocument>(
       unique: false,
       sparse: false,
       default: null,
-      index: false,
     },
 
     // PWD Card fields - only in User model
@@ -393,11 +392,15 @@ const UserMongooseSchema = new Schema<IUserDocument>(
   },
 );
 
-// Indexes for better query performance
-UserMongooseSchema.index({ pwd_issued_id: 1 });
-UserMongooseSchema.index({ card_id: 1 });
+// Indexes for better query performance - REMOVED DUPLICATES
+// pwd_issued_id and card_id are already indexed via unique: true
 UserMongooseSchema.index({ "address.barangay": 1 });
 UserMongooseSchema.index({ last_name: 1, first_name: 1 });
+UserMongooseSchema.index({ status: 1 });
+UserMongooseSchema.index({ is_verified: 1 });
+UserMongooseSchema.index({ created_at: -1 }); // For sorting by creation date
+UserMongooseSchema.index({ email: 1 }); // Already unique but adding for compound queries
+UserMongooseSchema.index({ contact_number: 1 }); // Already unique but adding for compound queries
 
 // Hash password before saving
 UserMongooseSchema.pre<IUserDocument>("save", async function () {
@@ -435,11 +438,6 @@ UserMongooseSchema.pre<IUserDocument>("save", function () {
       age--;
     }
     user.age = age;
-  }
-
-  // Convert date_of_birth string to Date if needed
-  if (user.date_of_birth && typeof user.date_of_birth === "string") {
-    user.date_of_birth = new Date(user.date_of_birth);
   }
 
   // Ensure contact_number is exactly 11 characters and starts with 09
@@ -498,21 +496,28 @@ export const validateUserLogin = (data: unknown): UserLogin => {
 /**
  * Sanitizes a user object for public consumption
  */
+
 export const sanitizeUserForPublic = (user: any): UserPublic => {
+  // Create a deep copy to avoid mutating the original
   const userForZod = JSON.parse(JSON.stringify(user));
 
+  // Handle date_of_birth - convert Date to YYYY-MM-DD string
   if (userForZod.date_of_birth) {
+    // If it's a Date object or ISO string, convert to YYYY-MM-DD
     if (
       userForZod.date_of_birth instanceof Date ||
-      (typeof userForZod.date_of_birth === "object" &&
-        userForZod.date_of_birth.toISOString)
+      (typeof userForZod.date_of_birth === "string" &&
+        userForZod.date_of_birth.includes("T"))
     ) {
-      userForZod.date_of_birth = userForZod.date_of_birth
-        .toISOString()
-        .split("T")[0];
+      const date = new Date(userForZod.date_of_birth);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      userForZod.date_of_birth = `${year}-${month}-${day}`;
     }
   }
 
+  // Ensure address object has all required fields
   if (userForZod.address) {
     userForZod.address = {
       street: userForZod.address.street || "",
@@ -527,35 +532,115 @@ export const sanitizeUserForPublic = (user: any): UserPublic => {
     };
   }
 
-  const publicUser = UserPublicSchema.parse(userForZod);
-
-  let age = 0;
-  if (user.date_of_birth) {
-    const today = new Date();
-    const birthDate = new Date(user.date_of_birth);
-    age = today.getFullYear() - birthDate.getFullYear();
-    const monthDiff = today.getMonth() - birthDate.getMonth();
-
-    if (
-      monthDiff < 0 ||
-      (monthDiff === 0 && today.getDate() < birthDate.getDate())
-    ) {
-      age--;
-    }
+  // Ensure contact_number is a string
+  if (
+    userForZod.contact_number &&
+    typeof userForZod.contact_number !== "string"
+  ) {
+    userForZod.contact_number = String(userForZod.contact_number);
   }
 
-  const fullName = `${user.first_name || ""} ${
-    user.middle_name ? user.middle_name + " " : ""
-  }${user.last_name || ""}${user.suffix ? " " + user.suffix : ""}`;
+  try {
+    const publicUser = UserPublicSchema.parse(userForZod);
 
-  return {
-    ...publicUser,
-    age_display: `${age} years`,
-    full_name: fullName.trim(),
-    is_pwd_verified: user.is_verified,
-  };
+    // Calculate age for display
+    let age = 0;
+    if (user.date_of_birth) {
+      const today = new Date();
+      const birthDate = new Date(user.date_of_birth);
+      age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+
+      if (
+        monthDiff < 0 ||
+        (monthDiff === 0 && today.getDate() < birthDate.getDate())
+      ) {
+        age--;
+      }
+    }
+
+    // Generate full name
+    const fullName = `${user.first_name || ""} ${
+      user.middle_name ? user.middle_name + " " : ""
+    }${user.last_name || ""}${user.suffix ? " " + user.suffix : ""}`;
+
+    return {
+      ...publicUser,
+      age_display: `${age} years`,
+      full_name: fullName.trim(),
+      is_pwd_verified: user.is_verified,
+    };
+  } catch (error) {
+    console.error("Error sanitizing user:", error);
+
+    // Calculate age for display
+    let age = 0;
+    if (user.date_of_birth) {
+      const today = new Date();
+      const birthDate = new Date(user.date_of_birth);
+      age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+
+      if (
+        monthDiff < 0 ||
+        (monthDiff === 0 && today.getDate() < birthDate.getDate())
+      ) {
+        age--;
+      }
+    }
+
+    // Generate full name
+    const fullName = `${user.first_name || ""} ${
+      user.middle_name ? user.middle_name + " " : ""
+    }${user.last_name || ""}${user.suffix ? " " + user.suffix : ""}`.trim();
+
+    // Format date_of_birth to YYYY-MM-DD string
+    let formattedDateOfBirth = "";
+    if (user.date_of_birth) {
+      const date = new Date(user.date_of_birth);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      formattedDateOfBirth = `${year}-${month}-${day}`;
+    }
+
+    // Return properly typed object with only UserPublic fields (no created_at/updated_at)
+    return {
+      _id: user._id,
+      user_id: user.user_id,
+      first_name: user.first_name || "",
+      middle_name: user.middle_name || "",
+      last_name: user.last_name || "",
+      suffix: user.suffix || "",
+      sex: user.sex || "Other",
+      date_of_birth: formattedDateOfBirth,
+      age: user.age || age,
+      address: user.address || {
+        street: "",
+        barangay: "",
+        city_municipality: "",
+        province: "",
+        region: "",
+        zip_code: "",
+        country: "Philippines",
+        type: "Permanent" as const,
+      },
+      contact_number: user.contact_number || "",
+      avatar_url: user.avatar_url || null,
+      email: user.email || "",
+      role: user.role || "User",
+      status: user.status || "Pending",
+      is_verified: user.is_verified || false,
+      is_email_verified: user.is_email_verified || false,
+      form_id: user.form_id || null,
+      pwd_issued_id: user.pwd_issued_id || null,
+      card_id: user.card_id || null,
+      full_name: fullName,
+      age_display: `${age} years`,
+      is_pwd_verified: user.is_verified || false,
+    };
+  }
 };
-
 /**
  * Transforms Zod-validated data to Mongoose-compatible format
  */
